@@ -1,0 +1,320 @@
+<!doctype html> 
+<html lang="en"> 
+<head> 
+	<meta charset="UTF-8" />
+	<title>Phaser - Getting started</title>
+	<script type="text/javascript" src="js/phaser.min.js"></script>
+    <style type="text/css">
+        body {
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+<!--<script src="http://franciscodias.net:8120/socket.io/socket.io.js"></script>-->
+<script src="http://127.0.0.1:8120/socket.io/socket.io.js"></script>
+<script type="text/javascript">
+
+RemotePlayer = function (index, game, player, startX, startY, pad) {
+
+    var x = startX;
+    var y = startY;
+    this.pad = pad;
+
+    this.game = game;
+    this.health = 3;
+    this.player = player;
+    this.alive = true;
+
+    this.player = game.add.sprite(x, y, 'astronauta');
+    this.player.scale.setTo(0.6,0.6);
+    
+    this.player.animations.add('run', [1, 2, 3], 10, true);
+    this.player.animations.add('jump', [4], 10, null);
+
+    this.player.anchor.setTo(0.5, 0.5);
+
+    this.player.name = index.toString();
+    //this.player.body.immovable = true;
+    //this.player.body.collideWorldBounds = true;
+
+    //this.player.angle = game.rnd.angle();
+
+    this.lastPosition = { x: x, y: y }
+};
+
+RemotePlayer.prototype.update = function() {
+    if(this.player.x != this.lastPosition.x) {
+        this.player.play('run');
+        console.log("avanzando");
+        //this.player.rotation = Math.PI + game.physics.angleToXY(this.player, this.lastPosition.x, this.lastPosition.y);
+    } 
+    else if(this.player.y != this.lastPosition.y) {
+        this.player.play('jump');
+        console.log("brincando");
+        //this.player.rotation = Math.PI + game.physics.angleToXY(this.player, this.lastPosition.x, this.lastPosition.y);
+    } else {
+        this.player.frame = 0;
+    }
+
+
+//this.player.y != this.lastPosition.y
+    this.lastPosition.x = this.player.x;
+    this.lastPosition.y = this.player.y;
+};
+
+var game = new Phaser.Game(800, 600, Phaser.AUTO, '', { preload: preload, create: create, update: update, render: render });
+
+function preload () {
+    game.load.image('space', 'assets/bg.jpg');
+    game.load.spritesheet('dude', 'assets/dude.png', 64, 64);
+    game.load.spritesheet('enemy', 'assets/dude.png', 64, 64);
+
+    game.load.image('smoke1', 'assets/smoke1.png');
+    game.load.image('smoke2', 'assets/smoke2.png');
+    game.load.image('smoke3', 'assets/smoke3.png');
+    game.load.spritesheet('astronauta', 'assets/astronauta.png', 90,100);
+    game.load.spritesheet('dead', 'assets/dead.png', 24,24);
+
+    game.load.audio('sFx', 'assets/soundFx.ogg');
+
+    game.load.tilemap('map', 'assets/tilemap.json', null, Phaser.Tilemap.TILED_JSON); // loading the tilemap file
+    game.load.image('tileset', 'assets/tileset2.png'); // loading the tileset image
+}
+
+var socket;         // Socket connection
+
+var land;
+
+var player;
+
+var friends;
+
+var currentSpeed = 0;
+var pad;
+
+var facing = 'right';
+var speedX = 150;
+var emitter;
+var jumpTimer = 0;
+var vida = 3;
+
+var score = 0;
+var scoreText;
+
+//soundFx
+var fx;
+
+
+function create () {
+
+    socket = io.connect("http://127.0.0.1", {port: 8120, transports: ["websocket"]});
+    //socket = io.connect("http://franciscodias.net", {port: 8120, transports: ["websocket"]});
+
+
+    game.physics.startSystem(Phaser.Physics.ARCADE);
+    game.physics.arcade.gravity.y = 500;
+    //agregamos fondo
+    game.add.sprite(0, 0, 'space');
+    //tamaño real del escenario
+    game.world.setBounds(0, 0, 1600, 608);
+
+    fx = game.add.audio('sFx');
+    fx.addMarker('soundDead', 49, 2.0);
+    fx.addMarker('soundJump', 5, 1.0);
+    fx.addMarker('soundHurt', 22.2, 1.0);
+    fx.addMarker('collectDiamons', 15.3, 1.0);
+
+    //  Our tiled scrolling background
+    //land = game.add.tileSprite(0, 0, 800, 600, 'earth');
+    //land.fixedToCamera = true;
+
+    //  The base of our player
+    var startX = 60,
+        startY = game.world.height-100;
+    player = game.add.sprite(startX, startY, 'astronauta');
+    player.anchor.setTo(0.5, 0.5);
+    //player.animations.add('move', [0,1,2,3,4,5,6,7], 20, true);
+    //player.animations.add('stop', [3], 20, true);
+    //creamos animaciones para correr y brincar
+    player.animations.add('run', [1, 2, 3], 10, true);
+    player.animations.add('jump', [4], 10, null);
+    player.anchor.x = 0.5;
+    player.scale.setTo(0.6,0.6);
+
+    //  This will force it to decelerate and limit its speed
+    //player.body.drag.setTo(200, 200);
+    game.physics.arcade.enable(player);
+    player.body.collideWorldBounds = true;
+
+    //  Create some baddies to waste :)
+    friends = [];
+
+    player.bringToTop();
+
+    game.camera.follow(player);
+    game.camera.deadzone = new Phaser.Rectangle(150, 150, 500, 300);
+    game.camera.focusOnXY(0, 0);
+
+    //creamos el escenario con JSON y Tiled
+    map = this.add.tilemap('map'); // Carga el tilemap
+    map.addTilesetImage('tileset2', 'tileset'); // carga la imagen que se uso en tiled para rellenar los tiles
+    layer = map.createLayer('Capa de Patrones 1'); // la capa de Tiles, donde se creo el mapa
+    map.setCollisionBetween(0,1); // rango entre las tiles que colisionara: en este caso solo interactua con el ID 1
+
+    pad = game.input.keyboard.createCursorKeys();
+
+    // Start listening for events
+    setEventHandlers();
+}
+
+var setEventHandlers = function() {
+    // Socket connection successful
+    socket.on("connect", onSocketConnected);
+
+    // Socket disconnection
+    socket.on("disconnect", onSocketDisconnect);
+
+    // New player message received
+    socket.on("new player", onNewPlayer);
+
+    // Player move message received
+    socket.on("move player", onMovePlayer);
+
+    // Player removed message received
+    socket.on("remove player", onRemovePlayer);
+};
+
+// Socket connected
+function onSocketConnected() {
+    console.log("Connected to socket server");
+
+    // Send local player data to the game server
+    socket.emit("new player", {x: player.x, y:player.y});
+};
+
+// Socket disconnected
+function onSocketDisconnect() {
+    console.log("Disconnected from socket server");
+};
+
+// New player
+function onNewPlayer(data) {
+    console.log("New player connected: "+data.id);
+
+    // Add new player to the remote players array
+    friends.push(new RemotePlayer(data.id, game, player, data.x, data.y));
+};
+
+// Move player
+function onMovePlayer(data) {
+    
+    var movePlayer = playerById(data.id);
+
+    // Player not found
+    if (!movePlayer) {
+        console.log("Player not found: "+data.id);
+        return;
+    };
+
+    // Update player position
+    movePlayer.player.x = data.x;
+    movePlayer.player.y = data.y;
+    
+};
+
+// Remove player
+function onRemovePlayer(data) {
+
+    var removePlayer = playerById(data.id);
+
+    // Player not found
+    if (!removePlayer) {
+        console.log("Player not found: "+data.id);
+        return;
+    };
+
+    removePlayer.player.kill();
+
+    // Remove player from array
+    friends.splice(friends.indexOf(removePlayer), 1);
+
+};
+
+function update () {
+
+    game.physics.arcade.collide(player, layer);
+
+    for (var i = 0; i < friends.length; i++)
+    {
+        if (friends[i].alive)
+        {
+            friends[i].update();
+            game.physics.arcade.collide(player, friends[i].player);
+        }
+    }
+
+    player.body.velocity.x = 0;
+            
+    if(pad.left.isDown){
+        player.body.velocity.x = -speedX;
+        player.animations.play('run');
+        player.scale.setTo(-0.6,0.6);
+        facing = "left";
+        console.log(facing); 
+    }
+    else if(pad.right.isDown){
+        player.body.velocity.x = speedX;
+        player.animations.play('run');
+        player.scale.setTo(0.6,0.6);
+        facing = "right";
+        console.log(facing); 
+    }
+    else{
+        if (facing == 'right'){
+            player.frame = 0;
+            player.scale.setTo(0.6,0.6);
+        }
+        else if(facing == 'left'){
+            player.frame = 0;
+            player.scale.setTo(-0.6,0.6);
+        }
+    }
+    if(pad.up.isDown && player.body.onFloor() && game.time.now > jumpTimer){
+        player.body.velocity.y = -300;
+        fx.play('soundJump');
+    }
+    if(player.body.velocity.y != 0){
+        player.animations.stop();
+        player.frame = 4;
+    }
+    if(pad.down.isDown){
+        particleBurst();
+        speedX = 250;
+    }else{
+        speedX = 150;
+    }
+
+
+    socket.emit("move player", {x: player.x, y:player.y});
+}
+
+function render () {
+
+}
+
+// Find player by ID
+function playerById(id) {
+    var i;
+    for (i = 0; i < friends.length; i++) {
+        if (friends[i].player.name == id)
+            return friends[i];
+    };
+    
+    return false;
+};
+
+</script>
+
+</body>
+</html>
